@@ -1,2 +1,33 @@
-# ELISA-calculator
-An ELISA regression &amp; curve-fitting tool: 10 regression models, ED50/IC50 solving, bidirectional X↔Y back-calculation, and high-resolution curve export with legend and equation (up to 8K).
+# ELISACalc 回归/拟合计算程序
+
+用 **Slint 1.18.1** 复刻「ELISA Calc」的桌面拟合工具：左侧选模型 / 数据转换 / 功能入口，右侧录入 X（浓度/剂量）与 Y（反应值），一键拟合、看曲线、看方程、反算浓度、复制结果。
+
+## 1. 功能
+
+### 主界面功能入口
+| 按钮 | 作用 |
+|---|---|
+| **数据输入(E)** | 回到数据表，录入 X、Y；显示每行的 Y 拟合值与残差 |
+| **回归方程(R)** | 查看拟合方程、参数、ED50/IC50、R²/SSE/RMSE、完整残差表与可复制的结果文本 |
+| **由Y计算X** | 输入反应值 Y，反算浓度/剂量 X（解析反解优先，非单调模型会列出所有解） |
+| **由X计算Y** | 输入 X，预测反应值 Y（超出数据范围会提示“属外推”） |
+
+### 回归/拟合模型（10 种）
+| 模型 | 表达式 |
+|---|---|
+| 直线回归 | Y = a + b·X |
+| 二次曲线回归 | Y = a0 + a1·X + a2·X² |
+| 三次曲线回归 | Y = a0 + a1·X + a2·X² + a3·X³ |
+| Logit-log 直线回归 | ln[p/(1-p)] = a + b·log10(X)，输出 ED50/IC50 |
+| Logistic 曲线拟合 1（四参数） | Y = D + (A-D)/[1 + (X/C)^B] |
+| Logistic 曲线拟合 2（五参数） | Y = D + (A-D)/[1 + (X/C)^B]^G |
+| Logistic 曲线拟合 3（指数四参数） | Y = D + (A-D)/[1 + e^(-B·(X-C))] |
+| Hill 曲线拟合 | Y = Bottom + (Top-Bottom)·X^n/(k^n + X^n) |
+| 指数曲线拟合 | Y = a·e^(b·X) + c |
+| 三次样条插值 | 自然边界分段三次多项式，严格过每个数据点 |
+
+### 数据转换（X 列、Y 列各自独立）
+不转换、对数[2 为底]、对数[10 为底]、平方、平方根、指数、倒数。
+
+### 其它
+扣除本底（可填多个空白孔读数取均值）、拟合曲线绘制（X 轴可切对数坐标）、逐点拟合值与残差、结果一键复制（arboard）、Excel 两列整块粘贴导入、非法数据自动剔除并提示、帮助窗口。

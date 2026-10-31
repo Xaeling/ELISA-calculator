@@ -1,0 +1,33 @@
+[package]
+name = "elisa-calc-rs"
+version = "0.1.0"
+edition = "2021"
+description = "ELISA 回归/拟合计算程序（Rust + Slint 实现）"
+license = "MIT"
+build = "build.rs"
+default-run = "elisa-calc-rs"
+
+[dependencies]
+slint = "1.18.1"
+arboard = "3.4"
+# 仅取 jpeg / png 两个纯 Rust 编解码器，避免拉入 image 的全部依赖
+image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
+ab_glyph = "0.2"
+
+[build-dependencies]
+slint-build = "1.18.1"
+
+# 仅 Windows：把生成的 .ico 作为资源嵌入 exe（构建期依赖，不进入最终 exe）
+[target.'cfg(windows)'.build-dependencies]
+embed-resource = "2.5"
+
+[[bin]]
+name = "elisa-calc-rs"
+path = "src/main.rs"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
