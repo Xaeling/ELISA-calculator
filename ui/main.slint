@@ -1,0 +1,2219 @@
+// ===================== 内嵌字体（不依赖系统安装）=====================
+//
+// Mi Sans 由小米发布。这里把字体**子集化后内嵌进二进制**：
+//   · 界面：下面两条 import 由 Slint 编译器内嵌，编译后 exe 自包含；
+//   · 导出图：src/export.rs 用 include_bytes! 内嵌同一份 Regular。
+//
+// 子集化：仅保留 ASCII + 常用符号 + CJK 标点 + GB2312 全部汉字（6763）
+//         + 少量 GBK 常用字，共 7436 字形 → 单份 1.6MB（原 8MB）。
+//         生僻字会回退到下面 fallback 链里的系统字体，不会变方块。
+//         需要扩字集时改工具脚本重新生成即可（见 README「内嵌字体」）。
+//
+// 两个字重的 name 表已统一为 family="MiSans"、usWeightClass=400/600，
+// 这样 font-weight:700 能正确命中 Demibold（否则各字重是独立 family，
+// 粗体只会由引擎合成）。
+//
+// ⚠️ 许可：请自行确认 Mi Sans 的使用条款符合你的分发/商用场景。
+import "assets/MiSans-Regular.ttf";
+import "assets/MiSans-Demibold.ttf";
+
+import { LineEdit, ScrollView, TextEdit, Palette } from "std-widgets.slint";
+
+// ---------------- 主题：内置深色 / 浅色两套，可跟随系统自动切换 ----------------
+// system = 跟随系统（Palette.color-scheme 反映系统设置并实时更新）；light / dark = 强制。
+enum ThemeMode { system, light, dark }
+
+global Theme {
+    in-out property <ThemeMode> mode: ThemeMode.system;
+
+    // 系统当前是否为深色。由 Rust 端检测（读注册表 / defaults）后写入，
+    // 不依赖 Palette.color-scheme 的 unknown 回退（该行为在部分风格下不可靠）。
+    in-out property <bool> system-dark: true;
+
+    // 当前是否为深色
+    out property <bool> dark: root.mode == ThemeMode.system
+            ? root.system-dark
+            : (root.mode == ThemeMode.dark);
+
+    // ---- 基础色 ----
+    out property <color> win-bg: dark ? #16191f : #eff2f6;         // 窗口底色
+    out property <color> panel-bg: dark ? #1f242c : #e6eaf0;       // 左侧面板 / 状态栏
+    out property <color> card-bg: dark ? #252b34 : #ffffff;        // 卡片 / 表头 / 按钮底
+    out property <color> input-bg: dark ? #12161c : #ffffff;       // 输入框底色
+    out property <color> border: dark ? #39414d : #c4cbd6;         // 边框
+    out property <color> text: dark ? #e8ecf3 : #1a2029;           // 主文字
+    out property <color> text-dim: dark ? #a2adbd : #5a6472;       // 次要文字
+
+    // ---- 强调与语义色 ----
+    out property <color> accent: dark ? #4a9eff : #0b6bd8;         // 强调蓝
+    out property <color> accent-soft: dark ? #2b4a6f : #d6e6fb;    // 选中项底色
+    out property <color> ok: dark ? #63d297 : #0a7a4a;             // 绿（ED50 等）
+    out property <color> warn: dark ? #f0ad4e : #a35a00;           // 橙（提示 / 残差）
+
+    // ---- 绘图 ----
+    out property <color> plot-bg: dark ? #101319 : #ffffff;        // 绘图区底色
+    out property <color> grid: dark ? #333b45 : #dde2e9;           // 网格线
+    out property <color> curve: dark ? #ff6b6b : #d32020;          // 拟合曲线
+    out property <color> dot: dark ? #5aa9ff : #1e5ac8;            // 实测点
+
+    // ---- 按钮（自绘）----
+    out property <color> btn-bg: dark ? #252b34 : #ffffff;
+    out property <color> btn-hover: dark ? #2c333d : #eef1f6;
+    out property <color> btn-pressed: dark ? #242a33 : #dde2ea;
+    out property <color> btn-border: dark ? #39414d : #b9c1cd;
+    out property <color> btn-text: dark ? #e8ecf3 : #1a2029;
+    out property <color> btn-dis-bg: dark ? #20242b : #e9ecf1;
+    out property <color> btn-dis-text: dark ? #6b7280 : #9aa3af;
+    out property <color> pri-bg: dark ? #2a5f9e : #0b6bd8;
+    out property <color> pri-hover: dark ? #2f6fbd : #1172e0;
+    out property <color> pri-pressed: dark ? #1d5aa8 : #0a5cb8;
+    out property <color> pri-border: dark ? #4a9eff : #0b6bd8;
+    out property <color> pri-text: #ffffff;
+
+    // ---- 动效：成功态 / 卡片描边渐变 / 弥散背光 ----
+    out property <color> ok-solid: dark ? #2eb872 : #12a150;        // 成功对勾的实心绿
+    out property <color> ok-text: #ffffff;                          // 成功态文字
+    out property <color> ok-soft: dark ? #16342a : #e8f6ee;         // 成功提示块的柔和底色
+    out property <color> glow: dark ? #4a9eff55 : #0b6bd838;        // 卡片底部弥散背光
+    // 卡片描边流动渐变的三段色（首尾同色，循环无缝）
+    out property <color> stroke-a: dark ? #4a9eff : #7fb2f0;
+    out property <color> stroke-b: dark ? #a06bff : #b79cf5;
+    out property <color> stroke-c: dark ? #38d6c4 : #8fdcd0;
+
+    // ---- 复选框 / 列表项 ----
+    out property <color> check-border: dark ? #5a6472 : #98a2b0;
+    out property <color> check-mark: dark ? #0d1117 : #ffffff;
+    out property <color> item-hover: dark ? #2f3742 : #e8eefb;
+    out property <color> item-active: dark ? #2b4a6f : #dceafd;   // 选中项底色
+    out property <color> item-text: dark ? #e8ecf3 : #1a2029;
+
+    // ---- 弹出面板（下拉框等）----
+    out property <color> popup-bg: dark ? #20252d : #ffffff;
+    out property <color> popup-border: dark ? #39414d : #d3dae4;
+    out property <color> popup-shadow: dark ? #00000070 : #16202e33;
+    out property <color> popup-hover: dark ? #2c333d : #f0f4fa;
+    out property <color> sep: dark ? #39414d : #dfe4ec;           // 分隔线
+}
+
+export struct KV {
+    k: string,
+    v: string,
+}
+
+export struct Tick {
+    pos: float,
+    label: string,
+}
+
+export struct Dot {
+    px: float,
+    py: float,
+}
+
+/// 反算表格的一行（由 Y 算 X / 由 X 算 Y 共用）
+export struct CalcRow {
+    no: string,
+    input: string,
+    output: string,
+    note: string,
+}
+
+// ---------------- 自绘按钮（颜色完全自控，避免深色/浅色主题下文字看不清） ----------------
+/// 下拉框的“当前展开者”：**全局单例**。
+///
+/// 为什么用 global：Slint 的 PopupWindow **没有 closed 回调**，点击弹窗外部时
+/// 关闭动作由 Slint 执行、我们无法感知。因此改为：
+///   · 弹窗的关闭仍交给 Slint（`close-policy: close-on-click`，且该点击会
+///     **下传**给下方元素，所以点一次就能同时“关闭弹窗 + 触发目标控件”）；
+///   · 展开状态由这个 global 维护，**任何**交互入口（按钮、输入框、选项…）
+///     都能直接把它复位，从而让箭头方向与实际状态一致。
+/// 组件内也能读写，无需层层回调。
+global DdState {
+    in-out property <int> open-id: -1;   // -1 = 没有下拉框展开
+}
+
+component MyButton inherits Rectangle {
+    in property <string> text: "";
+    in property <bool> enabled: true;
+    in property <bool> primary: false;
+    /// 加载中：按钮收成圆形并显示旋转指示器
+    in-out property <bool> busy: false;
+    /// 已完成：显示绿色对勾（1 秒后由调用方清除，恢复原状）
+    in-out property <bool> done: false;
+    /// 显示为“叉号”图标（用 Path 绘制，不用字符 ×，避免字体缺字形变方块）
+    in property <bool> x-icon: false;
+    callback clicked();
+
+    height: 32px;
+    // 本体透明，可见形状由 body 承担（这样才能做“收成圆形”的宽度动画）
+    background: transparent;
+    border-width: 0px;
+
+    // 收起条件：加载中或刚完成
+    property <bool> compact: root.busy || root.done;
+    // 按压：0.96 物理弹性压缩（释放时由 spring 曲线超调回弹）
+    property <float> sq: (root.enabled && ta.pressed) ? 0.96 : 1.0;
+    property <length> bw: (root.compact ? 32px : root.width) * root.sq;
+    property <length> bh: 32px * root.sq;
+
+    body := Rectangle {
+        width: root.bw;
+        height: root.bh;
+        // 缩放后居中补偿
+        x: (root.width - root.bw) / 2;
+        y: (root.height - root.bh) / 2;
+        border-radius: root.compact ? (root.bh / 2) : 4px;
+        border-width: 1px;
+        border-color: !root.enabled ? Theme.btn-dis-bg
+            : root.done ? Theme.ok-solid
+            : (root.primary ? Theme.pri-border : Theme.btn-border);
+        background: !root.enabled ? Theme.btn-dis-bg
+            : root.done ? Theme.ok-solid
+            : ta.pressed ? (root.primary ? Theme.pri-pressed : Theme.btn-pressed)
+            : ta.has-hover ? (root.primary ? Theme.pri-hover : Theme.btn-hover)
+            : (root.primary ? Theme.pri-bg : Theme.btn-bg);
+
+        // 按压内阴影：制造“按下去”的深度感
+        inner-shadow-blur: (root.enabled && ta.pressed) ? 10px : 0px;
+        inner-shadow-color: #00000066;
+        inner-shadow-offset-y: (root.enabled && ta.pressed) ? 2px : 0px;
+
+        // 收缩 / 回弹用弹簧曲线（spring 的 bounce 需在 -1..1）
+        animate width, height, x, y, border-radius {
+            duration: 300ms;
+            easing: spring(0.45);
+        }
+        animate inner-shadow-blur, inner-shadow-offset-y { duration: 140ms; easing: ease-out; }
+        animate background, border-color { duration: 180ms; easing: ease-out; }
+
+        Text {
+            width: 100%;
+            height: 100%;
+            text: root.text;
+            visible: !root.x-icon;
+            color: !root.enabled ? Theme.btn-dis-text
+                : root.done ? Theme.ok-text
+                : (root.primary ? Theme.pri-text : Theme.btn-text);
+            horizontal-alignment: center;
+            vertical-alignment: center;
+            font-size: 13px;
+            opacity: root.compact ? 0.0 : 1.0;
+            animate opacity { duration: 120ms; }
+        }
+
+        // 叉号：同样用 Path 绘制，彻底避免“小方块”
+        if root.x-icon && !root.compact: Path {
+            width: 12px;
+            height: 12px;
+            x: (parent.width - 12px) / 2;
+            y: (parent.height - 12px) / 2;
+            viewbox-width: 12;
+            viewbox-height: 12;
+            commands: "M 1.5 1.5 L 10.5 10.5 M 10.5 1.5 L 1.5 10.5";
+            stroke: !root.enabled ? Theme.btn-dis-text
+                : (root.primary ? Theme.pri-text : Theme.btn-text);
+            stroke-width: 2px;
+        }
+
+        // 旋转加载指示器（只在 busy 时创建 —— 不常驻，避免无谓重绘）
+        if root.busy: spin := Rectangle {
+            width: 32px;
+            height: 32px;
+            x: (parent.width - 32px) / 2;
+            y: (parent.height - 32px) / 2;
+            background: transparent;
+            // 动画时间轴：1.1s 一圈
+            property <float> tk: mod(animation-tick(), 1.1s) / 1.1s;
+
+            // 12 点相位旋转（半径 9，中心 16,16；按动画时间推进相位，形成旋转彗尾）
+            for d in [
+                { x: 14.5px, y: 5.5px, p: 0.0000 },
+                { x: 19.0px, y: 6.7px, p: 0.0833 },
+                { x: 22.3px, y: 10.0px, p: 0.1667 },
+                { x: 23.5px, y: 14.5px, p: 0.2500 },
+                { x: 22.3px, y: 19.0px, p: 0.3333 },
+                { x: 19.0px, y: 22.3px, p: 0.4167 },
+                { x: 14.5px, y: 23.5px, p: 0.5000 },
+                { x: 10.0px, y: 22.3px, p: 0.5833 },
+                { x: 6.7px, y: 19.0px, p: 0.6667 },
+                { x: 5.5px, y: 14.5px, p: 0.7500 },
+                { x: 6.7px, y: 10.0px, p: 0.8333 },
+                { x: 10.0px, y: 6.7px, p: 0.9167 },
+            ]: Rectangle {
+                x: d.x;
+                y: d.y;
+                width: 3px;
+                height: 3px;
+                border-radius: 1.5px;
+                background: root.primary ? Theme.pri-text : Theme.btn-text;
+                // 亮度由“相位滞后”决定：头部 ph≈0 最亮，尾部 ph→1 渐隐，
+                // 12 个点依次亮起即形成旋转彗尾。
+                // 相位用条件补 1 保证落在 [0,1) —— 不依赖对 float 取模。
+                opacity: 0.18 + 0.82 * (1.0 - (spin.tk - d.p + (spin.tk < d.p ? 1.0 : 0.0)));
+            }
+        }
+
+        // 成功：绿色对勾
+        if root.done && !root.busy: Path {
+            width: 18px;
+            height: 18px;
+            x: (parent.width - 18px) / 2;
+            y: (parent.height - 18px) / 2;
+            viewbox-width: 24;
+            viewbox-height: 24;
+            commands: "M 3 13 L 9.5 19.5 L 21 6";
+            stroke: Theme.ok-text;
+            stroke-width: 3px;
+        }
+    }
+
+    ta := TouchArea {
+        width: 100%;
+        height: 100%;
+        mouse-cursor: pointer;
+        clicked => {
+            if (root.enabled) {
+                // 任何按钮点击都视为“焦点转移”→ 复位下拉展开状态（箭头翻回）。
+                // 与 PopupWindow 配合：Slint 会关闭弹窗并把这次点击下传到这里，
+                // 所以一次点击即可同时“关闭弹窗 + 触发本按钮”。
+                DdState.open-id = -1;
+                root.clicked();
+            }
+        }
+    }
+}
+
+/// 卡片：流动渐变描边 + 底部呼吸弥散背光
+///
+/// 说明：Rectangle 没有旋转属性，因此“旋转渐变描边”用**渐变条循环平移**实现 ——
+/// 一条 3 倍宽的渐变带在卡片内水平流动，中间被内容层遮住，只露出 4px 边缘，
+/// 视觉上就是色彩沿边框不断旋转流转。底部弥散背光用 drop-shadow-blur 做“动态模糊”，
+/// 模糊半径与偏移随时间呼吸（三角波，不依赖 sin）。
+/// 时间轴来自 animation-tick()，无需 Rust 侧定时器。
+component FancyCard inherits Rectangle {
+    /// 关闭后不再有动画（省电 / 低性能机器可用）
+    in property <bool> fx: true;
+
+    background: transparent;
+    border-width: 0px;
+
+    // 呼吸相位：0 → 1 → 0 的三角波
+    property <float> br-t: mod(animation-tick(), 3.6s) / 3.6s;
+    property <float> breath: root.br-t < 0.5 ? (root.br-t * 2.0) : (2.0 - root.br-t * 2.0);
+    // 描边流光相位：0 → 1 循环
+    property <float> flow: root.fx ? (mod(animation-tick(), 6s) / 6s) : 0.0;
+
+    // ① 底部弥散背光（动态模糊 + 呼吸）
+    Rectangle {
+        x: 18px;
+        y: root.height - 12px;
+        width: root.width - 36px;
+        height: 20px;
+        border-radius: 10px;
+        background: Theme.glow;
+        drop-shadow-color: Theme.glow;
+        drop-shadow-blur: root.fx ? (13px + 17px * root.breath) : 16px;
+        drop-shadow-offset-y: root.fx ? (3px + 5px * root.breath) : 5px;
+    }
+
+    // ② 卡片主体
+    Rectangle {
+        width: 100%;
+        height: 100%;
+        background: Theme.card-bg;
+        border-radius: 6px;
+        border-width: 1px;
+        border-color: Theme.border;
+        clip: true;
+
+        // 流动渐变带（宽 3×，水平循环平移；首尾同色保证衔接无缝）
+        Rectangle {
+            y: 0;
+            height: 100%;
+            width: root.width * 3;
+            x: -2 * root.width * root.flow;
+            background: @linear-gradient(90deg,
+                Theme.stroke-a 0%,
+                Theme.stroke-b 12%,
+                Theme.stroke-c 25%,
+                Theme.stroke-a 37%,
+                Theme.stroke-b 50%,
+                Theme.stroke-c 62%,
+                Theme.stroke-a 75%,
+                Theme.stroke-b 87%,
+                Theme.stroke-c 100%);
+        }
+
+        // 内容层：内缩 2px，露出 2px 渐变描边
+        Rectangle {
+            x: 2px;
+            y: 2px;
+            width: root.width - 4px;
+            height: root.height - 4px;
+            border-radius: 5px;
+            background: Theme.card-bg;
+        }
+
+        @children
+    }
+}
+
+// ---------------- 自绘复选框 ----------------
+component MyCheckBox inherits Rectangle {
+    in property <string> text: "";
+    in-out property <bool> checked: false;
+    callback toggled();
+
+    height: 26px;
+    // 本体透明，可见形状由内部元素承担（便于做按压缩放）
+    background: transparent;
+    border-width: 0px;
+
+    // 按压：方框缩到 0.88（释放时由 spring 曲线超调回弹）
+    property <float> sq: ta.pressed ? 0.88 : 1.0;
+
+    ta := TouchArea {
+        width: 100%;
+        height: 100%;
+        mouse-cursor: pointer;
+        clicked => {
+            DdState.open-id = -1;
+            root.checked = !root.checked;
+            root.toggled();
+        }
+    }
+
+    HorizontalLayout {
+        padding-left: 2px;
+        spacing: 7px;
+        alignment: start;
+        Rectangle {
+            width: 17px * root.sq;
+            height: 17px * root.sq;
+            y: (26px - 17px * root.sq) / 2;
+            border-radius: 3px;
+            border-width: 1px;
+            border-color: root.checked ? Theme.accent : (ta.has-hover ? Theme.accent : Theme.check-border);
+            background: root.checked ? Theme.accent : Theme.input-bg;
+
+            // 按压内阴影：制造“按下去”的深度感
+            inner-shadow-blur: ta.pressed ? 7px : 0px;
+            inner-shadow-color: #00000066;
+            inner-shadow-offset-y: ta.pressed ? 1px : 0px;
+
+            animate width, height, y {
+                duration: 200ms;
+                easing: spring(0.5);
+            }
+            animate background, border-color { duration: 150ms; easing: ease-out; }
+            animate inner-shadow-blur, inner-shadow-offset-y { duration: 120ms; easing: ease-out; }
+
+            // 对勾：用 Path 绘制。
+            // 不能再用字符 "✓" —— 部分字体没有该字形，会渲染成小方块。
+            Path {
+                width: 11px;
+                height: 11px;
+                x: (parent.width - 11px) / 2;
+                y: (parent.height - 11px) / 2;
+                viewbox-width: 24;
+                viewbox-height: 24;
+                commands: "M 3 13 L 9.5 19.5 L 21 6";
+                stroke: Theme.check-mark;
+                stroke-width: 3.2px;
+                visible: root.checked;
+            }
+        }
+        Text {
+            text: root.text;
+            color: Theme.text;
+            font-size: 13px;
+            vertical-alignment: center;
+        }
+    }
+}
+
+// ---------------- 自绘下拉框（现代样式：圆角 + 阴影浮层 + 自绘箭头/对勾）----------------
+component DropDown inherits Rectangle {
+    in property <[string]> items;
+    in property <length> drop-width: 240px;
+    in-out property <int> current-index: 0;
+    /// 本下拉框的唯一编号（0..N）；-1 表示不参与
+    in property <int> dd-id: -1;
+    callback selected(int);
+
+    /// 是否展开：由全局单例决定（见 DdState 的说明）
+    property <bool> open: DdState.open-id == root.dd-id && root.dd-id >= 0;
+
+    height: 32px;
+    width: root.drop-width;
+    // 本体透明，可见形状由 body 承担（便于做按压弹性压缩）
+    background: transparent;
+    border-width: 0px;
+
+    // 按压：0.97 弹性压缩（释放时 spring 超调回弹）
+    property <float> sq: ta.pressed ? 0.97 : 1.0;
+    property <length> bw: root.width * root.sq;
+    property <length> bh: root.height * root.sq;
+
+    body := Rectangle {
+        width: root.bw;
+        height: root.bh;
+        x: (root.width - root.bw) / 2;
+        y: (root.height - root.bh) / 2;
+        border-radius: 6px;
+        border-width: 1px;
+        border-color: root.open ? Theme.accent : Theme.btn-border;
+        background: root.open ? Theme.input-bg : Theme.btn-bg;
+
+        // 按压内阴影：制造“按下去”的深度感
+        inner-shadow-blur: ta.pressed ? 9px : 0px;
+        inner-shadow-color: #00000055;
+        inner-shadow-offset-y: ta.pressed ? 2px : 0px;
+
+        animate width, height, x, y {
+            duration: 220ms;
+            easing: spring(0.5);
+        }
+        animate background, border-color { duration: 160ms; easing: ease-out; }
+        animate inner-shadow-blur, inner-shadow-offset-y { duration: 120ms; easing: ease-out; }
+
+        HorizontalLayout {
+            padding-left: 10px;
+            padding-right: 10px;
+            spacing: 8px;
+            Text {
+                horizontal-stretch: 1;
+                text: root.items.length > 0 ? root.items[root.current-index] : "";
+                vertical-alignment: center;
+                color: Theme.text;
+                font-size: 13px;
+                overflow: elide;
+            }
+            // 自绘三角箭头（不用字符 ▾，避免字体缺字形显示成方块）
+            Path {
+                y: (parent.height - 6px) / 2;
+                width: 10px;
+                height: 6px;
+                viewbox-width: 10;
+                viewbox-height: 6;
+                commands: root.open ? "M 0 6 L 10 6 L 5 0 Z" : "M 0 0 L 10 0 L 5 6 Z";
+                fill: root.open ? Theme.accent : Theme.text-dim;
+            }
+        }
+    }
+
+    // TouchArea 放最后 → 位于最上层，确保点击总能命中
+    // 做成 toggle：已打开时再点一次即关闭并复位箭头
+    ta := TouchArea {
+        width: 100%;
+        height: 100%;
+        mouse-cursor: pointer;
+        clicked => {
+            if (root.open) {
+                // 已展开（或状态残留）→ 关闭
+                DdState.open-id = -1;
+                pop.close();
+            } else {
+                DdState.open-id = root.dd-id;
+                pop.show();
+            }
+        }
+    }
+
+    // 弹窗保持正常定位（贴着下拉框下方）。
+    //
+    // 注意：不能把弹窗开得比窗口大来当遮罩 —— Slint 会把 PopupWindow 约束到
+    // 窗口范围内，超出部分不可见，面板会被推到可视区之外（表现为“弹窗不显示”）。
+    //
+    // close-policy 必须用 **close-on-click**（默认值），不能用 no-auto-close：
+    // PopupWindow 是一层覆盖全窗口的输入层，若设成 no-auto-close，点在弹窗外的
+    // 点击事件会被这层吃掉，既不关闭也不下传 —— 于是窗口内的遮罩和箭头都收不到
+    // 点击（表现为“只能点选项才能关”）。用 close-on-click 则 Slint 会关闭弹窗，
+    // 且点击仍会下传到下方的元素，我们的遮罩/箭头才能收到。
+    pop := PopupWindow {
+        // 点击任意位置（弹窗内外）都关闭：保证弹窗一定会消失
+        close-policy: close-on-click;
+        x: 0;
+        y: root.height + 4px;
+        width: root.width;
+        height: min(320px, max(40px, root.items.length * 32px + 10px));
+
+        Rectangle {
+            width: 100%;
+            height: 100%;
+            background: Theme.popup-bg;
+            border-radius: 8px;
+            border-width: 1px;
+            border-color: Theme.popup-border;
+            drop-shadow-blur: 14px;
+            drop-shadow-color: Theme.popup-shadow;
+            drop-shadow-offset-y: 4px;
+
+            ScrollView {
+                x: 4px;
+                y: 4px;
+                width: parent.width - 8px;
+                height: parent.height - 8px;
+                content-width: parent.width - 8px;
+                content-height: root.items.length * 32px;
+                VerticalLayout {
+                    width: 100%;
+                    for item[i] in root.items: Rectangle {
+                        height: 32px;
+                        width: 100%;
+                        border-radius: 5px;
+                        background: i == root.current-index ? Theme.item-active : (it-ta.has-hover ? Theme.popup-hover : transparent);
+
+                        // 选中项左侧强调竖条
+                        Rectangle {
+                            x: 0;
+                            y: 5px;
+                            width: 3px;
+                            height: parent.height - 10px;
+                            border-radius: 1.5px;
+                            background: Theme.accent;
+                            visible: i == root.current-index;
+                        }
+
+                        Text {
+                            x: 12px;
+                            width: parent.width - 42px;
+                            text: item;
+                            font-size: 13px;
+                            color: i == root.current-index ? Theme.accent : Theme.item-text;
+                            vertical-alignment: center;
+                            overflow: elide;
+                        }
+
+                        // 自绘对勾（同样避免字体缺字形）
+                        Path {
+                            x: parent.width - 22px;
+                            y: (parent.height - 10px) / 2;
+                            width: 11px;
+                            height: 10px;
+                            viewbox-width: 11;
+                            viewbox-height: 10;
+                            commands: "M 0.5 5.2 L 3.9 8.6 L 10.5 1.4";
+                            stroke: Theme.accent;
+                            stroke-width: 2px;
+                            visible: i == root.current-index;
+                        }
+
+                        it-ta := TouchArea {
+                            width: 100%;
+                            height: 100%;
+                            clicked => {
+                                root.current-index = i;
+                                root.selected(i);
+                                DdState.open-id = -1;
+                                pop.close();
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+export component MainWindow inherits Window {
+    title: "ELISACalc 回归/拟合计算程序";
+    // 隐藏 Windows 原生标题栏（含最小化/最大化/关闭按钮），改用自绘的
+    // 三个 mac 风格圆形按钮（见标题行右侧）。
+    no-frame: true;
+    // 窗口图标：由 build.rs 用代码光栅化生成并写入 OUT_DIR，通过
+    // slint_build 的 include path 引用 —— 不需要任何外部图片素材文件。
+    // （Windows 的 exe 文件图标由 .rc 资源提供，见 build.rs）
+    icon: @image-url("appicon.png");
+
+    // 窗口尺寸说明：
+    //   - 宽度固定为最小宽度 1080px；
+    //   - 默认高度 850px：刻意**不**按“完整显示数据表”来定高。
+    //     20 行表格实际需要约 840px 视图高度，本窗口只给它约 470px，
+    //     因此数据表默认处于滚动状态（只显示前 12 行左右），需要时滚动查看即可。
+    //     这样窗口整体紧凑，不会被长表格撑得很高。
+    //   高度构成：标题 34 + padding 20 + [视图区 ~468 + 间距 10 + 绘图区 300] + 状态栏 28 ≈ 860
+    min-width: 1080px;
+    min-height: 620px;
+    preferred-width: 1080px;
+    preferred-height: 860px;
+    // 透明背景：配合下面的 root-box 圆角容器，让四个角**透出桌面**，
+    // 从而实现“窗口边缘为圆角矩形”。
+    // （若所在平台/后端不支持窗口透明导致四角发黑，把这里改回
+    //   `Theme.win-bg` 即可退化为方角窗口 —— 内部 UI 不受影响。）
+    background: transparent;
+    // 界面字体：**优先 Mi Sans**（需系统已安装），找不到时按后面的顺序回退。
+    // 逗号分隔即 fallback 链，与本机的字体名匹配（Windows 上可能是 "MiSans" 或
+    // "Mi Sans"，两种写法都列上）。改字体只需改这一行。
+    // MiSans 已内嵌，优先使用；后面的系统字体仅作**生僻字兜底**
+    // （内嵌的是子集，极罕见字符会落到这里）。
+    default-font-family: "MiSans, Mi Sans, Microsoft YaHei, 微软雅黑, PingFang SC, Noto Sans CJK SC, sans-serif";
+    default-font-size: 14px;
+
+    // ---- 自绘窗口控制（no-frame 下替代原生标题栏）----
+    // 这三个**一次性动作**一律由 Rust 用 Slint 官方 API 实现
+    // （set_minimized / set_maximized / quit_event_loop），不走任何 Win32 消息。
+    callback win-minimize();
+    callback win-maximize();
+    callback win-close();
+    // 拖动标题栏：传入指针在 TouchArea 内的坐标（逻辑像素）
+    callback win-drag-start(length, length);
+    callback win-drag-move(length, length);
+    callback win-drag-end();
+
+    // 由 Rust 端调用：参数为“系统当前是否为深色”，用于跟随系统明暗
+    callback apply-system-theme(bool);
+    apply-system-theme(d) => {
+        Theme.system-dark = d;
+        // 只在“跟随系统”模式下同步原生控件配色；手动指定时下拉里已单独设置
+        if Theme.mode == ThemeMode.system {
+            Palette.color-scheme = Theme.dark ? ColorScheme.dark : ColorScheme.light;
+        }
+    }
+
+    init => {
+        // 初始按当前已知的系统主题应用（随后由 Rust 定时器持续同步）
+        root.apply-system-theme(Theme.system-dark);
+    }
+
+    // ---------------- 状态 ----------------
+    in-out property <int> view: 0; // 0=数据输入 1=回归方程 2=由Y/X互算
+    in-out property <string> data-name: "标准曲线";
+    in-out property <int> model-index: 0;
+    in-out property <int> x-tf-index: 0;
+    in-out property <int> y-tf-index: 0;
+    in-out property <bool> blank-on: false;
+    in-out property <string> blank: "";
+    in-out property <bool> log-x: false;
+
+    in-out property <[string]> model-items: [];
+    in-out property <[string]> model-formulas: [];
+    in-out property <[string]> tf-items: [];
+
+    // 数据表（各数组等长，index 即行号；row-no 由 Rust 端生成，避免字符串插值差异）
+    in-out property <[string]> xs: [];
+    in-out property <[string]> ys: [];
+    in-out property <[string]> fits: [];
+    in-out property <[string]> resids: [];
+    in-out property <[string]> row-no: [];
+
+    // 拟合结果
+    in-out property <string> formula-text: "Y = a + b·X";
+    in-out property <string> equation: "（尚未拟合）";
+    in-out property <string> stats: "";
+    in-out property <string> notes: "";
+    // R² 可信度徽章（由 Rust 端按 R² 阈值设置；show 为 false 时隐藏）
+    in-out property <bool> r2-badge-show: false;
+    in-out property <string> r2-badge-text: "";
+    in-out property <color> r2-badge-bg: #0d8a50;
+    in-out property <string> r2-advice: "";
+    in-out property <[KV]> params: [];
+    in-out property <[KV]> extras: [];
+    in-out property <[string]> res-no: [];
+    in-out property <[string]> res-x: [];
+    in-out property <[string]> res-y: [];
+    in-out property <[string]> res-yh: [];
+    in-out property <[string]> res-res: [];
+    in-out property <string> result-text: "";
+
+    // 绘图
+    in-out property <bool> has-plot: false;
+    in-out property <string> grid-path: "";
+    in-out property <string> curve-path: "";
+    in-out property <[Dot]> dots: [];
+    in-out property <[Tick]> x-ticks: [];
+    in-out property <[Tick]> y-ticks: [];
+
+    // 反算
+    // 按钮的加载 / 成功状态（由 Rust 侧驱动：busy → done → 1s 后恢复）
+    in-out property <bool> fit-busy: false;
+    in-out property <bool> fit-done: false;
+    in-out property <bool> export-busy: false;
+    in-out property <bool> export-done: false;
+    in-out property <bool> yx-busy: false;
+    in-out property <bool> yx-done: false;
+    in-out property <bool> xy-busy: false;
+    in-out property <bool> xy-done: false;
+    in-out property <bool> copy-busy: false;
+    in-out property <bool> copy-done: false;
+    // 导出结果提示：成功后显示“已保存到程序所在目录”+ 文件名
+    in-out property <bool> export-saved-show: false;
+    in-out property <string> export-saved-name: "";
+
+    // 导出分辨率选项与当前选择
+    in-out property <[string]> export-res: ["1920 px（HD）", "2560 px（2K）", "3840 px（4K，推荐）", "7680 px（8K）"];
+    in-out property <int> export-res-index: 2;
+
+    // 由 Y 计算 X 的表格（批量）
+    in-out property <[CalcRow]> yx-rows;
+    // 由 X 计算 Y 的表格（批量）
+    in-out property <[CalcRow]> xy-rows;
+
+    in-out property <string> paste-text: "";
+    in-out property <string> help-text: "";
+    in-out property <string> status: "就绪：录入 X（浓度/剂量）与 Y（反应值）后点击『回归/拟合』。";
+
+    // ---------------- 回调 ----------------
+    callback fit();
+    callback clear-all();
+    callback copy-result();
+    callback quit();
+    callback parse-paste();
+    callback read-clipboard();
+    callback add-rows();
+    callback remove-row(int);
+    // 由 Y 计算 X：编辑第 i 行输入 / 批量计算 / 剪贴板粘贴 / 复制结果列 / 加行 / 清空
+    callback yx-set-input(int, string);
+    callback yx-calc();
+    callback yx-paste();
+    callback yx-copy();
+    callback yx-add-row();
+    callback yx-clear();
+    // 由 X 计算 Y
+    callback xy-set-input(int, string);
+    callback xy-calc();
+    callback xy-paste();
+    callback xy-copy();
+    callback xy-add-row();
+    callback xy-clear();
+    callback export-plot();
+
+    in-out property <[string]> export-formats: ["JPEG (.jpg)", "PNG (.png)"];
+    in-out property <int> export-fmt-index: 0;
+
+    in-out property <[string]> theme-items: ["跟随系统", "浅色", "深色"];
+    in-out property <int> theme-index: 0;
+
+    // 导入弹窗
+    import-pop := PopupWindow {
+        // 关键：默认 close-on-click 会在点击弹窗内部（含输入框）时立刻关闭，
+        // 导致根本来不及粘贴。改成只有点击弹窗外部才关闭。
+        close-policy: close-on-click-outside;
+        width: 620px;
+        height: 460px;
+        Rectangle {
+            width: 100%;
+            height: 100%;
+            background: Theme.panel-bg;
+            border-width: 1px;
+            border-color: Theme.border;
+            VerticalLayout {
+                padding: 10px;
+                spacing: 8px;
+                Text {
+                    text: "方式一：在 Excel 复制两列（X、Y），点下面的输入框，按 Ctrl+V；\n方式二：复制好后直接点『从剪贴板粘贴』按钮（不依赖输入框快捷键）。\n行数会自动扩展，不会截断。";
+                    font-size: 12px;
+                    color: Theme.text-dim;
+                    wrap: word-wrap;
+                }
+                Rectangle {
+                    background: Theme.input-bg;
+                    border-width: 1px;
+                    border-color: Theme.border;
+                    height: 300px;
+                    TextEdit {
+                        // 必须显式给尺寸：非布局容器内的控件默认尺寸为 0，不会自动填充
+                        width: 100%;
+                        height: 100%;
+                        // 双向绑定：编辑即写回 paste-text，无需 edited 回写
+                        text <=> root.paste-text;
+                    }
+                }
+                HorizontalLayout {
+                    spacing: 8px;
+                    alignment: end;
+                    MyButton {
+                        width: 130px;
+                        text: "从剪贴板粘贴";
+                        primary: true;
+                        clicked => {
+                            root.read-clipboard();
+                        }
+                    }
+                    MyButton {
+                        width: 110px;
+                        text: "解析填充";
+                        clicked => {
+                            root.parse-paste();
+                            import-pop.close();
+                        }
+                    }
+                    MyButton {
+                        width: 90px;
+                        text: "清空";
+                        clicked => {
+                            root.paste-text = "";
+                        }
+                    }
+                    MyButton {
+                        width: 90px;
+                        text: "关闭";
+                        clicked => {
+                            import-pop.close();
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // 帮助弹窗
+    help-pop := PopupWindow {
+        close-policy: close-on-click-outside;
+        width: 680px;
+        height: 600px;
+        Rectangle {
+            width: 100%;
+            height: 100%;
+            background: Theme.panel-bg;
+            border-width: 1px;
+            border-color: Theme.border;
+            VerticalLayout {
+                padding: 10px;
+                spacing: 8px;
+                Text {
+                    text: "帮助";
+                    font-size: 16px;
+                    font-weight: 700;
+                    color: Theme.text;
+                }
+                FancyCard {
+                    vertical-stretch: 1;
+                    ScrollView {
+                        width: 100%;
+                        height: 100%;
+                        content-width: 620px;
+                        content-height: 1400px;
+                        Text {
+                            x: 10px;
+                            width: 600px;
+                            text: root.help-text;
+                            wrap: word-wrap;
+                            font-size: 12px;
+                            color: Theme.text;
+                        }
+                    }
+                }
+                HorizontalLayout {
+                    alignment: end;
+                    MyButton {
+                        width: 90px;
+                        text: "关闭";
+                        clicked => {
+                            help-pop.close();
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // ---- 圆角窗口容器 ----
+    // Window 元素本身不支持 border-radius，所以把全部内容装进这个
+    // 圆角 + clip 的 Rectangle：四角被裁掉，配合 Window 的 transparent 背景
+    // 即可呈现圆角窗口。
+    root-box := Rectangle {
+        x: 0;
+        y: 0;
+        width: 100%;
+        height: 100%;
+        border-radius: 12px;
+        clip: true;
+        background: Theme.win-bg;
+        border-width: 1px;
+        border-color: Theme.border;
+
+        // 底层“空白捕获层”：**第一个**子元素 → 位于最底层。
+        // 只有点击真正的空白（上方没有任何可交互元素）时才会命中它。
+        // 作用：点击空白关闭下拉弹窗时（Slint 会把这次点击下传到这里），
+        // 复位展开状态，让箭头翻回 —— 否则箭头会一直保持“已展开”的样子。
+        bg-tap := TouchArea {
+            x: 0;
+            y: 0;
+            width: 100%;
+            height: 100%;
+            clicked => { DdState.open-id = -1; }
+        }
+
+        // 必须显式给尺寸：Rectangle **不是**布局容器，子元素不会自动填充，
+        // 否则 VerticalLayout 会退化到 preferred size（布局会塌掉）。
+        VerticalLayout {
+            x: 0;
+            y: 0;
+            width: 100%;
+            height: 100%;
+            padding: 10px;
+            spacing: 10px;
+
+            // ---- 标题行：整行可拖动，右侧自绘窗口控制按钮 ----
+            //
+            // 布局改用 **Rectangle 容器 + 绝对定位**（不用 HorizontalLayout）：
+            //   · 拖动区铺满整行（width/height 100%），因此“除了三个圆圈以外
+            //     的任意位置”都能拖动窗口；
+            //   · 按钮组用 x = parent.width - 按钮组宽 定位到右上角，
+            //     y = (行高 - 圆圈高)/2 → 圆圈中线 == 标题行中线（水平对齐）；
+            //   · 声明顺序决定层级：标题 Text → 拖动区 → 按钮组（最上层，
+            //     会拦截自己那 61px 内的点击，不会误触发拖动）。
+            Rectangle {
+                height: 34px;
+                background: transparent;
+
+                // ① 标题文字（在最底层；Text 默认不接收鼠标事件，故不影响拖动）
+                Text {
+                    x: 0;
+                    y: 0;
+                    width: parent.width - 70px;
+                    height: 100%;
+                    text: "ELISACalc 回归/拟合计算程序";
+                    font-size: 16px;
+                    font-weight: 700;
+                    color: Theme.accent;
+                    horizontal-alignment: left;
+                    vertical-alignment: center;
+                }
+
+                // ② 拖动区：铺满整行
+                // 注意：TouchArea **没有 pressed 回调**（pressed 只是输出属性），
+                // 所以用 pointer-event 捕获 down / move / up 三个阶段。
+                win-drag := TouchArea {
+                    x: 0;
+                    y: 0;
+                    width: 100%;
+                    height: 100%;
+                    pointer-event(e) => {
+                        if (e.kind == PointerEventKind.down) {
+                            root.win-drag-start(win-drag.mouse-x, win-drag.mouse-y);
+                        } else if (e.kind == PointerEventKind.move) {
+                            root.win-drag-move(win-drag.mouse-x, win-drag.mouse-y);
+                        } else if (e.kind == PointerEventKind.up || e.kind == PointerEventKind.cancel) {
+                            root.win-drag-end();
+                        }
+                    }
+                    double-clicked => { root.win-maximize(); }
+                }
+
+                // ③ 窗口控制：黄（最小化 −）→ 绿（最大化 □）→ 红（关闭 ×）
+                //    总宽 = 3×15 + 2×8 = 61px，位于右上角且垂直居中
+                HorizontalLayout {
+                    x: parent.width - 61px;
+                    y: (parent.height - 15px) / 2;
+                    width: 61px;
+                    height: 15px;
+                    spacing: 8px;
+                    alignment: center;
+
+                    // 最小化（黄，符号 −）—— 横线加长到 10px（圆圈直径 15px）
+                    Rectangle {
+                        width: 15px;
+                        height: 15px;
+                        border-radius: 7.5px;
+                        background: #febc2e;
+                        ta-min := TouchArea {
+                            width: 15px;
+                            height: 15px;
+                            clicked => { root.win-minimize(); }
+                        }
+                        Rectangle {
+                            width: 15px;
+                            height: 15px;
+                            border-radius: 7.5px;
+                            background: #00000030;
+                            visible: ta-min.has-hover;
+                        }
+                        Path {
+                            x: 2.5px;
+                            y: 6.1px;
+                            width: 10px;
+                            height: 3px;
+                            viewbox-width: 10;
+                            viewbox-height: 3;
+                            commands: "M 0 1.5 L 10 1.5";
+                            stroke: #6b4a00;
+                            stroke-width: 2px;
+                        }
+                    }
+
+                    // 最大化 / 还原（绿，符号 □）
+                    Rectangle {
+                        width: 15px;
+                        height: 15px;
+                        border-radius: 7.5px;
+                        background: #28c840;
+                        ta-max := TouchArea {
+                            width: 15px;
+                            height: 15px;
+                            clicked => { root.win-maximize(); }
+                        }
+                        Rectangle {
+                            width: 15px;
+                            height: 15px;
+                            border-radius: 7.5px;
+                            background: #00000030;
+                            visible: ta-max.has-hover;
+                        }
+                        Path {
+                            x: 3.9px;
+                            y: 3.9px;
+                            width: 7.2px;
+                            height: 7.2px;
+                            viewbox-width: 8;
+                            viewbox-height: 8;
+                            commands: "M 0.8 0.8 L 7.2 0.8 L 7.2 7.2 L 0.8 7.2 Z";
+                            stroke: #0a5c1c;
+                            stroke-width: 1.5px;
+                        }
+                    }
+
+                    // 关闭（红，符号 ×）
+                    Rectangle {
+                        width: 15px;
+                        height: 15px;
+                        border-radius: 7.5px;
+                        background: #ff5f57;
+                        ta-close := TouchArea {
+                            width: 15px;
+                            height: 15px;
+                            clicked => { root.win-close(); }
+                        }
+                        Rectangle {
+                            width: 15px;
+                            height: 15px;
+                            border-radius: 7.5px;
+                            background: #00000030;
+                            visible: ta-close.has-hover;
+                        }
+                        Path {
+                            x: 3.9px;
+                            y: 3.9px;
+                            width: 7.2px;
+                            height: 7.2px;
+                            viewbox-width: 8;
+                            viewbox-height: 8;
+                            commands: "M 0.8 0.8 L 7.2 7.2 M 7.2 0.8 L 0.8 7.2";
+                            stroke: #7a1008;
+                            stroke-width: 1.5px;
+                        }
+                    }
+                }
+            }
+
+            HorizontalLayout {
+                spacing: 10px;
+
+                // ============ 左：功能入口与控制 ============
+                Rectangle {
+                    width: 264px;
+                    vertical-stretch: 1;
+                    min-height: 0px;
+                    preferred-height: 0px;
+                    background: Theme.panel-bg;
+                    border-width: 1px;
+                    border-color: Theme.border;
+                    border-radius: 4px;
+
+                    // 面板内容放进 ScrollView：窗口变矮时左侧自己滚动，不把整行撑高
+                    ScrollView {
+                        width: 100%;
+                        height: 100%;
+                        content-width: 244px;
+                        content-height: 752px;
+
+                    VerticalLayout {
+                        padding: 10px;
+                        spacing: 8px;
+
+                        MyButton {
+                            text: "数据输入(E)";
+                            clicked => {
+                                root.view = 0;
+                            }
+                        }
+                        MyButton {
+                            text: "回归方程(R)";
+                            enabled: root.has-plot;
+                            clicked => {
+                                root.view = 1;
+                            }
+                        }
+                        HorizontalLayout {
+                            spacing: 6px;
+                            MyButton {
+                                text: "由Y计算X";
+                                enabled: root.has-plot;
+                                clicked => {
+                                    root.view = 2;
+                                }
+                            }
+                            MyButton {
+                                text: "由X计算Y";
+                                enabled: root.has-plot;
+                                clicked => {
+                                    root.view = 2;
+                                }
+                            }
+                        }
+
+                        Rectangle {
+                            height: 1px;
+                            background: Theme.border;
+                        }
+
+                        Text {
+                            text: "数据名称";
+                            font-size: 12px;
+                            color: Theme.text-dim;
+                        }
+                        LineEdit {
+                            width: 240px;
+                            text: root.data-name;
+                            edited(v) => { DdState.open-id = -1; 
+                                root.data-name = v;
+                            }
+                        }
+
+                        Text {
+                            text: "回归/拟合模型(M)";
+                            font-size: 12px;
+                            color: Theme.text-dim;
+                        }
+                        model-dd := DropDown {
+                            dd-id: 0;
+                            items: root.model-items;
+                            current-index: root.model-index;
+                            selected(i) => {
+                                root.model-index = i;
+                                root.formula-text = root.model-formulas[i];
+                            }
+                        }
+                        Text {
+                            text: root.formula-text;
+                            font-size: 12px;
+                            color: Theme.accent;
+                            wrap: word-wrap;
+                            width: 240px;
+                        }
+
+                        Text {
+                            text: "X（浓度/剂量）转换";
+                            font-size: 12px;
+                            color: Theme.text-dim;
+                        }
+                        xtf-dd := DropDown {
+                            dd-id: 1;
+                            items: root.tf-items;
+                            current-index: root.x-tf-index;
+                            selected(i) => {
+                                root.x-tf-index = i;
+                            }
+                        }
+
+                        Text {
+                            text: "Y（反应值）转换";
+                            font-size: 12px;
+                            color: Theme.text-dim;
+                        }
+                        ytf-dd := DropDown {
+                            dd-id: 2;
+                            items: root.tf-items;
+                            current-index: root.y-tf-index;
+                            selected(i) => {
+                                root.y-tf-index = i;
+                            }
+                        }
+
+                        MyCheckBox {
+                            text: "扣除本底";
+                            checked <=> root.blank-on;
+                        }
+                        LineEdit {
+                            width: 240px;
+                            enabled: root.blank-on;
+                            placeholder-text: "本底值，多个用逗号分隔取均值";
+                            text: root.blank;
+                            edited(v) => { DdState.open-id = -1; 
+                                root.blank = v;
+                            }
+                        }
+
+                        MyCheckBox {
+                            text: "绘图 X 轴按对数显示";
+                            checked <=> root.log-x;
+                        }
+
+                        Text {
+                            text: "界面主题";
+                            font-size: 12px;
+                            color: Theme.text-dim;
+                        }
+                        theme-dd := DropDown {
+                            dd-id: 3;
+                            items: root.theme-items;
+                            current-index <=> root.theme-index;
+                            selected(i) => {
+                                if i == 0 {
+                                    Theme.mode = ThemeMode.system;
+                                    root.apply-system-theme(Theme.system-dark);
+                                } else if i == 1 {
+                                    Theme.mode = ThemeMode.light;
+                                    Palette.color-scheme = ColorScheme.light;
+                                } else {
+                                    Theme.mode = ThemeMode.dark;
+                                    Palette.color-scheme = ColorScheme.dark;
+                                }
+                            }
+                        }
+
+                        Rectangle {
+                            height: 1px;
+                            background: Theme.border;
+                        }
+
+                        MyButton {
+                            text: "回归/拟合";
+                            primary: true;
+                            busy <=> root.fit-busy;
+                            done <=> root.fit-done;
+                            clicked => {
+                                root.fit();
+                            }
+                        }
+                        HorizontalLayout {
+                            spacing: 6px;
+                            MyButton {
+                                text: "复制";
+                                busy <=> root.copy-busy;
+                                done <=> root.copy-done;
+                                clicked => {
+                                    root.copy-result();
+                                }
+                            }
+                            MyButton {
+                                text: "清除";
+                                clicked => {
+                                    root.clear-all();
+                                }
+                            }
+                        }
+                        HorizontalLayout {
+                            spacing: 6px;
+                            MyButton {
+                                text: "帮助";
+                                clicked => {
+                                    help-pop.show();
+                                }
+                            }
+                            MyButton {
+                                text: "退出";
+                                clicked => {
+                                    root.quit();
+                                }
+                            }
+                        }
+                        MyButton {
+                            text: "粘贴 / 导入数据";
+                            clicked => {
+                                import-pop.show();
+                            }
+                        }
+                    }
+                    }
+                }
+
+                // ============ 右：数据 / 方程 / 反算 + 绘图 ============
+                // 两行的高度职责分离：Row 1 拉伸占剩余空间，Row 2 固定 300px。
+                GridLayout {
+                    vertical-stretch: 1;
+                    min-height: 0px;
+                    preferred-height: 0px;
+                    spacing: 10px;
+
+                    Row {
+                        // ---- 上段：视图区 ----
+                        Rectangle {
+                            colspan: 1;
+                            vertical-stretch: 1;
+                            min-height: 0px;
+                            preferred-height: 0px;
+                            background: Theme.panel-bg;
+                            border-width: 1px;
+                            border-color: Theme.border;
+                            border-radius: 4px;
+                            clip: true;
+
+                    if root.view == 0: VerticalLayout {
+                        width: 100%;
+                        height: 100%;
+                        spacing: 4px;
+
+                        ScrollView {
+                            vertical-stretch: 1;
+                            min-height: 0px;
+                            preferred-height: 0px;
+                            width: 100%;
+                            content-width: 620px;
+                            content-height: root.xs.length * 39px + 60px;
+                            VerticalLayout {
+                            padding: 4px;
+                            spacing: 3px;
+                            Rectangle {
+                                height: 30px;
+                                background: Theme.card-bg;
+                                border-radius: 3px;
+                                HorizontalLayout {
+                                    spacing: 5px;
+                                    padding-left: 6px;
+                                    padding-right: 6px;
+                                    Text {
+                                        width: 46px;
+                                        text: "No.";
+                                        font-weight: 700;
+                                        color: Theme.text;
+                                        horizontal-alignment: center;
+                                        vertical-alignment: center;
+                                    }
+                                    Text {
+                                        width: 140px;
+                                        text: "X（浓度/剂量）";
+                                        font-weight: 700;
+                                        color: Theme.text;
+                                        vertical-alignment: center;
+                                    }
+                                    Text {
+                                        width: 140px;
+                                        text: "Y（反应值）";
+                                        font-weight: 700;
+                                        color: Theme.text;
+                                        vertical-alignment: center;
+                                    }
+                                    Text {
+                                        width: 120px;
+                                        text: "Y 拟合值";
+                                        font-weight: 700;
+                                        color: Theme.text;
+                                        vertical-alignment: center;
+                                    }
+                                    Text {
+                                        width: 120px;
+                                        text: "残差";
+                                        font-weight: 700;
+                                        color: Theme.text;
+                                        vertical-alignment: center;
+                                    }
+                                    Text {
+                                        width: 36px;
+                                        text: "";
+                                    }
+                                }
+                            }
+                            for xv[i] in root.xs: HorizontalLayout {
+                                spacing: 5px;
+                                height: 36px;
+                                padding-left: 6px;
+                                padding-right: 6px;
+                                Text {
+                                    width: 46px;
+                                    text: root.row-no[i];
+                                    horizontal-alignment: center;
+                                    vertical-alignment: center;
+                                    color: Theme.text-dim;
+                                    font-size: 12px;
+                                }
+                                LineEdit {
+                                    width: 140px;
+                                    text: root.xs[i];
+                                    edited(v) => { DdState.open-id = -1; 
+                                        root.xs[i] = v;
+                                        root.fits[i] = "";
+                                        root.resids[i] = "";
+                                        root.status = "数据已修改，请重新点击『回归/拟合』。";
+                                    }
+                                }
+                                LineEdit {
+                                    width: 140px;
+                                    text: root.ys[i];
+                                    edited(v) => { DdState.open-id = -1; 
+                                        root.ys[i] = v;
+                                        root.fits[i] = "";
+                                        root.resids[i] = "";
+                                        root.status = "数据已修改，请重新点击『回归/拟合』。";
+                                    }
+                                }
+                                Text {
+                                    width: 120px;
+                                    text: root.fits[i];
+                                    vertical-alignment: center;
+                                    font-size: 12px;
+                                    color: Theme.accent;
+                                    overflow: elide;
+                                }
+                                Text {
+                                    width: 120px;
+                                    text: root.resids[i];
+                                    vertical-alignment: center;
+                                    font-size: 12px;
+                                    color: Theme.warn;
+                                    overflow: elide;
+                                }
+                                MyButton {
+                                    width: 36px;
+                                    x-icon: true;
+                                    clicked => {
+                                        root.remove-row(i);
+                                    }
+                                }
+                            }
+                        } // ← 关闭滚动内容 VerticalLayout
+                        } // ← 关闭 ScrollView
+
+                        // 底部按钮条：放在滚动区之外，固定高度，始终可见、不参与滚动
+                        HorizontalLayout {
+                            height: 36px;
+                            spacing: 8px;
+                            padding-left: 4px;
+                            MyButton {
+                                width: 130px;
+                                text: "+ 增加 5 行";
+                                clicked => {
+                                    root.add-rows();
+                                }
+                            }
+                            Text {
+                                text: "支持科学计数法，如 1.5e-3；粘贴导入时行数自动扩展";
+                                vertical-alignment: center;
+                                font-size: 12px;
+                                color: Theme.text-dim;
+                            }
+                        }
+                    } // ← 关闭 view 0 的 VerticalLayout
+
+                    if root.view == 1: VerticalLayout {
+                        width: 100%;
+                        height: 100%;
+                        ScrollView {
+                            vertical-stretch: 1;
+                            min-height: 0px;
+                            preferred-height: 0px;
+                            width: 100%;
+                            content-width: 620px;
+                            content-height: root.res-x.length * 26px + 560px;
+                        VerticalLayout {
+                            padding: 6px;
+                            spacing: 6px;
+                            Rectangle {
+                                background: Theme.card-bg;
+                                border-radius: 4px;
+                                border-width: 1px;
+                                border-color: Theme.border;
+                                VerticalLayout {
+                                    padding: 10px;
+                                    spacing: 6px;
+                                    Text {
+                                        text: "拟合方程";
+                                        font-weight: 700;
+                                        color: Theme.text;
+                                    }
+                                    Text {
+                                        text: root.equation;
+                                        wrap: word-wrap;
+                                        color: Theme.accent;
+                                        font-size: 14px;
+                                    }
+                                    Text {
+                                        text: "参数";
+                                        font-weight: 700;
+                                        color: Theme.text;
+                                    }
+                                    for kv in root.params: HorizontalLayout {
+                                        spacing: 8px;
+                                        Text {
+                                            width: 150px;
+                                            text: kv.k;
+                                            font-size: 13px;
+                                            color: Theme.text-dim;
+                                        }
+                                        Text {
+                                            text: kv.v;
+                                            font-size: 13px;
+                                            color: Theme.text;
+                                        }
+                                    }
+                                    for kv in root.extras: HorizontalLayout {
+                                        spacing: 8px;
+                                        Text {
+                                            width: 150px;
+                                            text: kv.k;
+                                            font-size: 13px;
+                                            color: Theme.ok;
+                                        }
+                                        Text {
+                                            text: kv.v;
+                                            font-size: 13px;
+                                            color: Theme.ok;
+                                        }
+                                    }
+                                    HorizontalLayout {
+                                        spacing: 8px;
+                                        alignment: start;
+                                        Text {
+                                            text: root.stats;
+                                            font-size: 13px;
+                                            color: Theme.text;
+                                            vertical-alignment: center;
+                                        }
+                                        // R² 可信度徽章：≥0.99 绿（可信度高）/
+                                        // ≥0.95 橙（中等）/ <0.95 红（可信度低）
+                                        if root.r2-badge-show: Rectangle {
+                                            height: 19px;
+                                            border-radius: 9.5px;
+                                            background: root.r2-badge-bg;
+                                            HorizontalLayout {
+                                                padding-left: 8px;
+                                                padding-right: 8px;
+                                                alignment: center;
+                                                Text {
+                                                    text: root.r2-badge-text;
+                                                    font-size: 11px;
+                                                    font-weight: 700;
+                                                    color: #ffffff;
+                                                    vertical-alignment: center;
+                                                }
+                                            }
+                                            // 出现时轻微放大淡入，强调“着重标识”
+                                            opacity: root.r2-badge-show ? 1.0 : 0.0;
+                                            animate opacity { duration: 220ms; easing: ease-out; }
+                                        }
+                                    }
+                                    if root.r2-advice != "": Text {
+                                        text: root.r2-advice;
+                                        font-size: 12px;
+                                        color: root.r2-badge-bg;
+                                        wrap: word-wrap;
+                                    }
+                                    if root.notes != "": Text {
+                                        text: root.notes;
+                                        wrap: word-wrap;
+                                        color: Theme.warn;
+                                        font-size: 12px;
+                                    }
+                                }
+                            }
+
+                            Rectangle {
+                                background: Theme.card-bg;
+                                border-radius: 4px;
+                                border-width: 1px;
+                                border-color: Theme.border;
+                                VerticalLayout {
+                                    padding: 10px;
+                                    spacing: 4px;
+                                    Text {
+                                        text: "残差表（按 X 升序）";
+                                        font-weight: 700;
+                                        color: Theme.text;
+                                    }
+                                    HorizontalLayout {
+                                        spacing: 5px;
+                                        height: 24px;
+                                        Text {
+                                            width: 50px;
+                                            text: "No.";
+                                            font-weight: 700;
+                                            color: Theme.text;
+                                            vertical-alignment: center;
+                                        }
+                                        Text {
+                                            width: 120px;
+                                            text: "X";
+                                            font-weight: 700;
+                                            color: Theme.text;
+                                            vertical-alignment: center;
+                                        }
+                                        Text {
+                                            width: 120px;
+                                            text: "Y 实测";
+                                            font-weight: 700;
+                                            color: Theme.text;
+                                            vertical-alignment: center;
+                                        }
+                                        Text {
+                                            width: 120px;
+                                            text: "Y 拟合";
+                                            font-weight: 700;
+                                            color: Theme.text;
+                                            vertical-alignment: center;
+                                        }
+                                        Text {
+                                            width: 120px;
+                                            text: "残差";
+                                            font-weight: 700;
+                                            color: Theme.text;
+                                            vertical-alignment: center;
+                                        }
+                                    }
+                                    for xv[i] in root.res-x: HorizontalLayout {
+                                        spacing: 5px;
+                                        height: 26px;
+                                        Text {
+                                            width: 50px;
+                                            text: root.res-no[i];
+                                            vertical-alignment: center;
+                                            font-size: 12px;
+                                            color: Theme.text-dim;
+                                        }
+                                        Text {
+                                            width: 120px;
+                                            text: root.res-x[i];
+                                            vertical-alignment: center;
+                                            font-size: 12px;
+                                            color: Theme.text;
+                                            overflow: elide;
+                                        }
+                                        Text {
+                                            width: 120px;
+                                            text: root.res-y[i];
+                                            vertical-alignment: center;
+                                            font-size: 12px;
+                                            color: Theme.text;
+                                            overflow: elide;
+                                        }
+                                        Text {
+                                            width: 120px;
+                                            text: root.res-yh[i];
+                                            vertical-alignment: center;
+                                            font-size: 12px;
+                                            color: Theme.accent;
+                                            overflow: elide;
+                                        }
+                                        Text {
+                                            width: 120px;
+                                            text: root.res-res[i];
+                                            vertical-alignment: center;
+                                            font-size: 12px;
+                                            color: Theme.warn;
+                                            overflow: elide;
+                                        }
+                                    }
+                                }
+                            }
+
+                            Rectangle {
+                                background: Theme.card-bg;
+                                border-radius: 4px;
+                                border-width: 1px;
+                                border-color: Theme.border;
+                                VerticalLayout {
+                                    padding: 10px;
+                                    spacing: 6px;
+                                    Text {
+                                        text: "完整结果（可 Ctrl+A / Ctrl+C 手动复制）";
+                                        font-weight: 700;
+                                        color: Theme.text;
+                                    }
+                                    Rectangle {
+                                        background: Theme.input-bg;
+                                        border-width: 1px;
+                                        border-color: Theme.border;
+                                        height: 220px;
+                                        TextEdit {
+                                            width: 100%;
+                                            height: 100%;
+                                            text: root.result-text;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        } // ← 关闭 ScrollView
+                    } // ← 关闭 view 1 的 VerticalLayout
+
+                    if root.view == 2: VerticalLayout {
+                        width: 100%;
+                        height: 100%;
+                        ScrollView {
+                            vertical-stretch: 1;
+                            min-height: 0px;
+                            preferred-height: 0px;
+                            width: 100%;
+                            content-width: 700px;
+                            content-height: root.yx-rows.length * 38px + root.xy-rows.length * 38px + 300px;
+                        VerticalLayout {
+                            padding: 6px;
+                            spacing: 10px;
+
+                            // ================= 由 Y 计算 X =================
+                            FancyCard {
+                                VerticalLayout {
+                                    padding: 12px;
+                                    spacing: 9px;
+
+                                    Text {
+                                        text: "由 Y 计算 X（反算浓度 / 剂量）";
+                                        font-weight: 700;
+                                        font-size: 14px;
+                                        color: Theme.text;
+                                    }
+
+                                    HorizontalLayout {
+                                        spacing: 8px;
+                                        MyButton {
+                                            width: 108px;
+                                            text: "批量计算 X";
+                                            primary: true;
+                                            busy <=> root.yx-busy;
+                                            done <=> root.yx-done;
+                                            clicked => { root.yx-calc(); }
+                                        }
+                                        MyButton {
+                                            width: 124px;
+                                            text: "从剪贴板粘贴";
+                                            clicked => { root.yx-paste(); }
+                                        }
+                                        MyButton {
+                                            width: 108px;
+                                            text: "复制结果";
+                                            clicked => { root.yx-copy(); }
+                                        }
+                                        MyButton {
+                                            width: 100px;
+                                            text: "+ 增加 5 行";
+                                            clicked => { root.yx-add-row(); }
+                                        }
+                                        MyButton {
+                                            width: 76px;
+                                            text: "清空";
+                                            clicked => { root.yx-clear(); }
+                                        }
+                                    }
+
+                                    Text {
+                                        text: "粘贴：从 Excel 复制一列 Y 值即可（行数自动扩展）；复制结果：粘贴到 Excel 会自动排成一列。";
+                                        font-size: 11px;
+                                        color: Theme.text-dim;
+                                        wrap: word-wrap;
+                                    }
+
+                                    // 表头
+                                    Rectangle {
+                                        height: 30px;
+                                        background: Theme.panel-bg;
+                                        border-radius: 3px;
+                                        HorizontalLayout {
+                                            padding-left: 8px;
+                                            padding-right: 8px;
+                                            spacing: 8px;
+                                            Text { width: 42px; text: "No."; font-size: 12px; font-weight: 700; color: Theme.text-dim; vertical-alignment: center; }
+                                            Text { width: 150px; text: "Y（反应值）"; font-size: 12px; font-weight: 700; color: Theme.text-dim; vertical-alignment: center; }
+                                            Text { width: 160px; text: "X（算得）"; font-size: 12px; font-weight: 700; color: Theme.text-dim; vertical-alignment: center; }
+                                            Text { horizontal-stretch: 1; text: "备注"; font-size: 12px; font-weight: 700; color: Theme.text-dim; vertical-alignment: center; }
+                                        }
+                                    }
+
+                                    for row[i] in root.yx-rows: HorizontalLayout {
+                                        height: 32px;
+                                        spacing: 8px;
+                                        padding-left: 8px;
+                                        padding-right: 8px;
+                                        Text {
+                                            width: 42px;
+                                            text: row.no;
+                                            font-size: 12px;
+                                            color: Theme.text-dim;
+                                            vertical-alignment: center;
+                                        }
+                                        LineEdit {
+                                            width: 150px;
+                                            text: row.input;
+                                            placeholder-text: "Y";
+                                            edited(v) => { DdState.open-id = -1;  root.yx-set-input(i, v); }
+                                        }
+                                        LineEdit {
+                                            width: 160px;
+                                            text: row.output;
+                                            placeholder-text: "—";
+                                            read-only: true;
+                                        }
+                                        Text {
+                                            horizontal-stretch: 1;
+                                            text: row.note;
+                                            font-size: 11px;
+                                            color: Theme.warn;
+                                            vertical-alignment: center;
+                                            overflow: elide;
+                                        }
+                                    }
+                                }
+                            }
+
+                            // ================= 由 X 计算 Y =================
+                            FancyCard {
+                                VerticalLayout {
+                                    padding: 12px;
+                                    spacing: 9px;
+
+                                    Text {
+                                        text: "由 X 计算 Y（预测反应值）";
+                                        font-weight: 700;
+                                        font-size: 14px;
+                                        color: Theme.text;
+                                    }
+
+                                    HorizontalLayout {
+                                        spacing: 8px;
+                                        MyButton {
+                                            width: 108px;
+                                            text: "批量计算 Y";
+                                            primary: true;
+                                            busy <=> root.xy-busy;
+                                            done <=> root.xy-done;
+                                            clicked => { root.xy-calc(); }
+                                        }
+                                        MyButton {
+                                            width: 124px;
+                                            text: "从剪贴板粘贴";
+                                            clicked => { root.xy-paste(); }
+                                        }
+                                        MyButton {
+                                            width: 108px;
+                                            text: "复制结果";
+                                            clicked => { root.xy-copy(); }
+                                        }
+                                        MyButton {
+                                            width: 100px;
+                                            text: "+ 增加 5 行";
+                                            clicked => { root.xy-add-row(); }
+                                        }
+                                        MyButton {
+                                            width: 76px;
+                                            text: "清空";
+                                            clicked => { root.xy-clear(); }
+                                        }
+                                    }
+
+                                    Text {
+                                        text: "粘贴：从 Excel 复制一列 X 值即可（行数自动扩展）；X 超出数据范围时属外推，会在备注中提示。";
+                                        font-size: 11px;
+                                        color: Theme.text-dim;
+                                        wrap: word-wrap;
+                                    }
+
+                                    // 表头
+                                    Rectangle {
+                                        height: 30px;
+                                        background: Theme.panel-bg;
+                                        border-radius: 3px;
+                                        HorizontalLayout {
+                                            padding-left: 8px;
+                                            padding-right: 8px;
+                                            spacing: 8px;
+                                            Text { width: 42px; text: "No."; font-size: 12px; font-weight: 700; color: Theme.text-dim; vertical-alignment: center; }
+                                            Text { width: 150px; text: "X（浓度/剂量）"; font-size: 12px; font-weight: 700; color: Theme.text-dim; vertical-alignment: center; }
+                                            Text { width: 160px; text: "Y（算得）"; font-size: 12px; font-weight: 700; color: Theme.text-dim; vertical-alignment: center; }
+                                            Text { horizontal-stretch: 1; text: "备注"; font-size: 12px; font-weight: 700; color: Theme.text-dim; vertical-alignment: center; }
+                                        }
+                                    }
+
+                                    for row[i] in root.xy-rows: HorizontalLayout {
+                                        height: 32px;
+                                        spacing: 8px;
+                                        padding-left: 8px;
+                                        padding-right: 8px;
+                                        Text {
+                                            width: 42px;
+                                            text: row.no;
+                                            font-size: 12px;
+                                            color: Theme.text-dim;
+                                            vertical-alignment: center;
+                                        }
+                                        LineEdit {
+                                            width: 150px;
+                                            text: row.input;
+                                            placeholder-text: "X";
+                                            edited(v) => { DdState.open-id = -1;  root.xy-set-input(i, v); }
+                                        }
+                                        LineEdit {
+                                            width: 160px;
+                                            text: row.output;
+                                            placeholder-text: "—";
+                                            read-only: true;
+                                        }
+                                        Text {
+                                            horizontal-stretch: 1;
+                                            text: row.note;
+                                            font-size: 11px;
+                                            color: Theme.warn;
+                                            vertical-alignment: center;
+                                            overflow: elide;
+                                        }
+                                    }
+                                }
+                            }
+
+                            Rectangle {
+                                background: Theme.card-bg;
+                                border-radius: 5px;
+                                border-width: 1px;
+                                border-color: Theme.border;
+                                VerticalLayout {
+                                    padding: 12px;
+                                    spacing: 6px;
+                                    Text {
+                                        text: "当前模型：" + root.model-items[root.model-index];
+                                        font-size: 12px;
+                                        color: Theme.text-dim;
+                                    }
+                                    Text {
+                                        text: root.formula-text;
+                                        font-size: 12px;
+                                        color: Theme.accent;
+                                        wrap: word-wrap;
+                                    }
+                                    Text {
+                                        text: "说明：非单调模型（二次、三次、样条）可能有多解，X 列给出第一个解，备注列列出全部解；若提示未找到解，说明该 Y 不在曲线值域内。";
+                                        font-size: 11px;
+                                        color: Theme.text-dim;
+                                        wrap: word-wrap;
+                                    }
+                                }
+                            }
+                        }
+                        } // ← 关闭 view 2 的 ScrollView
+                    } // ← 关闭 view 2 的 VerticalLayout
+
+                        } // ← 关闭“视图区”矩形
+                    } // ← 关闭 Row 1
+
+                    Row {
+                        // ============ 绘图区：画布 + 侧边导出面板 ============
+                        // 与上方“视图区”用同一套外框（1px / Theme.border / 圆角 4），
+                        // 这样左右两栏、上下两行的**外侧框线完全对齐**。
+                        Rectangle {
+                            colspan: 1;
+                            vertical-stretch: 0;
+                            width: 100%;
+                            height: 300px;
+                            background: Theme.panel-bg;
+                            border-width: 1px;
+                            border-color: Theme.border;
+                            border-radius: 4px;
+                            clip: true;
+
+                            HorizontalLayout {
+                                x: 10px;
+                                y: 9px;
+                                width: parent.width - 20px;
+                                height: parent.height - 20px;
+                                spacing: 12px;
+                                alignment: center;
+
+                                // ---- 画布 500×280（横向加宽、高度压低；与 src/main.rs 的 PLOT_W/PLOT_H 一致）----
+                                Rectangle {
+                                    width: 500px;
+                                    height: 280px;
+                                    // 不再有 y 偏移：由外层 HorizontalLayout 统一垂直居中
+                                    background: Theme.plot-bg;
+                                    border-width: 1px;
+                                    border-color: Theme.border;
+                                    border-radius: 6px;
+                                    clip: true;
+
+                                    Path {
+                                        x: 0;
+                                        y: 0;
+                                        width: 500px;
+                                        height: 280px;
+                                        viewbox-width: 500;
+                                        viewbox-height: 280;
+                                        clip: true;
+                                        commands: root.grid-path;
+                                        stroke: Theme.grid;
+                                        stroke-width: 1px;
+                                    }
+                                    Path {
+                                        x: 0;
+                                        y: 0;
+                                        width: 500px;
+                                        height: 280px;
+                                        viewbox-width: 500;
+                                        viewbox-height: 280;
+                                        clip: true;
+                                        commands: root.curve-path;
+                                        stroke: Theme.curve;
+                                        stroke-width: 2px;
+                                    }
+                                    // 实测点标记：正方形（无圆角）
+                                    for d in root.dots: Rectangle {
+                                        x: (d.px - 3.5) * 1px;
+                                        y: (d.py - 3.5) * 1px;
+                                        width: 7px;
+                                        height: 7px;
+                                        border-radius: 0px;
+                                        background: Theme.dot;
+                                    }
+                                    for t in root.x-ticks: Text {
+                                        x: (t.pos - 32) * 1px;
+                                        y: parent.height - 16px;
+                                        width: 64px;
+                                        horizontal-alignment: center;
+                                        text: t.label;
+                                        font-size: 10px;
+                                        color: Theme.text-dim;
+                                    }
+                                    for t in root.y-ticks: Text {
+                                        x: 3px;
+                                        y: (t.pos - 7) * 1px;
+                                        width: 54px;
+                                        horizontal-alignment: right;
+                                        text: t.label;
+                                        font-size: 10px;
+                                        color: Theme.text-dim;
+                                    }
+                                    if !root.has-plot: Text {
+                                        x: 10px;
+                                        y: 0;
+                                        width: parent.width - 20px;
+                                        height: 100%;
+                                        horizontal-alignment: center;
+                                        vertical-alignment: center;
+                                        text: "暂无有效数据 —— 录入数据并点击『回归/拟合』后显示曲线";
+                                        font-size: 12px;
+                                        color: Theme.text-dim;
+                                        wrap: word-wrap;
+                                    }
+                                }
+
+                                // ---- 侧边：导出相关 ----
+                                Rectangle {
+                                    width: 250px;
+                                    height: 280px;
+                                    // 不再有 y 偏移：与画布顶边严格对齐
+                                    background: Theme.panel-bg;
+                                    border-width: 1px;
+                                    border-color: Theme.border;
+                                    border-radius: 6px;
+
+                                    VerticalLayout {
+                                        padding: 12px;
+                                        spacing: 10px;
+                                        alignment: start;
+
+                                        Text {
+                                            text: "导出";
+                                            font-size: 14px;
+                                            font-weight: 700;
+                                            color: Theme.text;
+                                        }
+                                        Rectangle {
+                                            height: 1px;
+                                            background: Theme.sep;
+                                        }
+                                        Text {
+                                            text: "图片格式";
+                                            font-size: 12px;
+                                            color: Theme.text-dim;
+                                        }
+                                        fmt-dd := DropDown {
+                                            dd-id: 4;
+                                            drop-width: 226px;
+                                            items: root.export-formats;
+                                            current-index <=> root.export-fmt-index;
+                                            selected(i) => { }
+                                        }
+                                        Text {
+                                            text: "分辨率（图片宽度）";
+                                            font-size: 12px;
+                                            color: Theme.text-dim;
+                                        }
+                                        res-dd := DropDown {
+                                            dd-id: 5;
+                                            drop-width: 226px;
+                                            items: root.export-res;
+                                            current-index <=> root.export-res-index;
+                                            selected(i) => { }
+                                        }
+                                        MyButton {
+                                            width: 226px;
+                                            text: "导出曲线图片";
+                                            primary: true;
+                                            enabled: root.has-plot;
+                                            busy <=> root.export-busy;
+                                            done <=> root.export-done;
+                                            clicked => {
+                                                root.export-plot();
+                                            }
+                                        }
+                                        // 导出结果：成功后**着重标注**保存位置。
+                                        // 用带底色 + 强调色边框的块，配合 Path 画的对勾，
+                                        // 比单纯一行灰字显眼得多。
+                                        if root.export-saved-show: Rectangle {
+                                            width: 226px;
+                                            border-radius: 5px;
+                                            background: Theme.ok-soft;
+                                            border-width: 1px;
+                                            border-color: Theme.ok-solid;
+                                            VerticalLayout {
+                                                padding: 8px;
+                                                spacing: 3px;
+                                                HorizontalLayout {
+                                                    spacing: 5px;
+                                                    alignment: start;
+                                                    Path {
+                                                        width: 11px;
+                                                        height: 11px;
+                                                        viewbox-width: 24;
+                                                        viewbox-height: 24;
+                                                        commands: "M 3 13 L 9.5 19.5 L 21 6";
+                                                        stroke: Theme.ok-solid;
+                                                        stroke-width: 3.4px;
+                                                    }
+                                                    Text {
+                                                        text: "已保存到程序所在目录";
+                                                        font-size: 11px;
+                                                        font-weight: 700;
+                                                        color: Theme.ok-solid;
+                                                        vertical-alignment: center;
+                                                    }
+                                                }
+                                                Text {
+                                                    text: root.export-saved-name;
+                                                    font-size: 11px;
+                                                    color: Theme.text;
+                                                    wrap: word-wrap;
+                                                    width: 210px;
+                                                }
+                                            }
+                                        }
+                                        Text {
+                                            text: "坐标：X 轴 50 一格，Y 轴 0.5 一格";
+                                            font-size: 11px;
+                                            color: Theme.text-dim;
+                                            wrap: word-wrap;
+                                            width: 226px;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    } // ← 关闭 Row 2
+                } // ← 关闭右侧 GridLayout
+            }
+
+            // ============ 状态栏 ============
+            Rectangle {
+                height: 28px;
+                background: Theme.panel-bg;
+                border-width: 1px;
+                border-color: Theme.border;
+                border-radius: 3px;
+                Text {
+                    x: 8px;
+                    width: parent.width - 16px;
+                    text: root.status;
+                    vertical-alignment: center;
+                    font-size: 12px;
+                    color: Theme.text;
+                    overflow: elide;
+                }
+            }
+        } // ← 关闭 root-box（圆角窗口容器）
+    }
+}
